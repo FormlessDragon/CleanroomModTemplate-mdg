@@ -8,7 +8,7 @@ plugins {
     id 'java-library'
     id 'maven-publish'
     id 'org.jetbrains.gradle.plugin.idea-ext' version '1.4.1'
-    id 'xyz.wagyourtail.unimined' version '1.4.43-kappa'
+    id 'net.neoforged.moddev.mcpforge' version '2.0.185-legacy'
     id 'net.kyori.blossom' version '2.2.0'
     id 'com.diffplug.spotless' version '8.10.3' apply false
     id 'com.gradleup.shadow' version '9.6.1' apply false
@@ -58,10 +58,6 @@ java {
 configurations {
     contain
     implementation.extendsFrom(contain)
-    modCompileOnly
-    compileOnly.extendsFrom(modCompileOnly)
-    modRuntimeOnly
-    runtimeOnly.extendsFrom(modRuntimeOnly)
     if (propertyBool('enable_shadow')) {
         shaded
         implementation.extendsFrom(shaded)
@@ -70,31 +66,37 @@ configurations {
 
 boolean useMixins = propertyBool('use_mixins')
 def mixinConfigs = propertyStringList('mixin_configs', ',')
-String mixinConfigValue = mixinConfigs.join(',')
 
-String remapTaskName = propertyBool('enable_shadow') ? "remapShadowJar" : "remapJar"
+String reobfTaskName = 'reobfJar'
+
+if (propertyBool('enable_shadow')) {
+    def reobfShadowJar = obfuscation.reobfuscate(tasks.named('shadowJar'), sourceSets.main)
+    reobfTaskName = reobfShadowJar.name
+    tasks.named('assemble').configure {
+        dependsOn reobfShadowJar
+    }
+}
 
 //noinspection GroovyAssignabilityCheck
-unimined.minecraft {
-    version "1.12.2"
-
-    mappings {
-        mcp("stable", "39-1.12")
+mcpForge {
+    if (propertyBool('use_access_transformer')) {
+        accessTransformers.from(propertyStringList('access_transformer_locations').collect {
+            "src/main/resources/${it}"
+        })
     }
 
-    cleanroom {
-        if (propertyBool('use_access_transformer')) {
-            accessTransformer "${rootProject.projectDir}/src/main/resources/${propertyString('access_transformer_locations')}"
-        }
-        loader "0.6.13-alpha"
-        runs.all {
-            args += ['--username', minecraft_username]
-            if (useMixins) {
-                systemProperty('crl.dev.mixin', mixinConfigValue)
-            }
+    enable {
+        cleanroomVersion = '0.6.13-alpha'
+        mcpMappings = 'de.oceanlabs.mcp:mcp_stable:39-1.12@zip'
+        obfuscateJar = !propertyBool('enable_shadow')
+    }
+
+    runs {
+        configureEach {
+            programArguments.addAll('--username', propertyString('minecraft_username'))
             def extraArgs = propertyString('extra_jvm_args')
             if (extraArgs != null && !extraArgs.trim().isEmpty()) {
-                jvmArgs += extraArgs.split { "\\s+" }.toList()
+                extraArgs.trim().split(/\s+/).each { jvmArgument(it) }
             }
             if (propertyBool('enable_foundation_debug')) {
                 systemProperty("foundation.dump", "true")
@@ -103,39 +105,42 @@ unimined.minecraft {
             if (propertyBool('is_coremod')) {
                 systemProperty("fml.coreMods.load", propertyString('coremod_plugin_class_name'))
             }
-            return
         }
-    }
-
-    defaultRemapJar = false
-
-    if (sourceSet == sourceSets.main) {
-        String jarTaskName = propertyBool('enable_shadow') ? "shadowJar" : "jar"
-
-        remap(tasks.named(jarTaskName).get()) {
-            if (useMixins) {
-                mixinRemap {
-                    enableBaseMixin()
-                    enableMixinExtra()
-                }
-            }
+        client {
+            client()
+            disableIdeRun()
+        }
+        server {
+            server()
+            disableIdeRun()
+            systemProperty 'fml.queryResult', 'confirm'
         }
     }
 
     mods {
-        remap(configurations.modCompileOnly)
-        remap(configurations.modRuntimeOnly)
+        create(propertyString('mod_id')) {
+            sourceSet(sourceSets.main)
+        }
     }
 }
 
-// Remove the annoying blue icon by Unimined
-tasks.matching { it.name == 'genIntellijRuns' }.configureEach {
-    enabled = false
+def mixinRefmap = null
+if (useMixins) {
+    mixin {
+        mixinConfigs.each { config(it) }
+        String refmap = propertyString('mixin_refmap')
+        if (!refmap.isBlank()) {
+            mixinRefmap = add(refmap)
+        }
+    }
 }
 
 // Do not configure your deps here!
 // Check gradle/scripts/dependencies.gradle for that.
 dependencies {
+    if (useMixins) {
+        annotationProcessor 'com.cleanroommc:cleanmix:0.7.2'
+    }
     if (propertyBool('enable_junit_testing')) {
         testImplementation 'org.junit.jupiter:junit-jupiter:6.1.3'
         testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -180,8 +185,32 @@ compileJava {
     sourceCompatibility = targetCompatibility = JavaVersion.VERSION_25
 }
 
+def modManifestAttributes = {
+    def attribute_map = [:]
+    attribute_map['ModType'] = "CRL"
+    if (configurations.contain.size() > 0) {
+        attribute_map['ContainedDeps'] = configurations.contain.collect { it.name }.join(' ')
+        attribute_map['NonModDeps'] = true
+    }
+    if (propertyBool('is_coremod')) {
+        attribute_map['FMLCorePlugin'] = propertyString('coremod_plugin_class_name')
+        if (propertyBool('coremod_includes_mod')) {
+            attribute_map['FMLCorePluginContainsFMLMod'] = true
+        }
+    }
+    if (propertyBool('use_access_transformer')) {
+        attribute_map['FMLAT'] = propertyString('access_transformer_locations')
+    }
+    return attribute_map
+}
+
 jar {
-    archiveClassifier = 'dev'
+    if (propertyBool('enable_shadow')) {
+        archiveClassifier = 'plain'
+    } else {
+        archiveClassifier = 'dev'
+        destinationDirectory = layout.buildDirectory.dir('libs')
+    }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     if (configurations.contain.size() > 0) {
         into('/') {
@@ -190,42 +219,43 @@ jar {
     }
     doFirst {
         manifest {
-            def attribute_map = [:]
-            attribute_map['ModType'] = "CRL"
-            if (useMixins) {
-                attribute_map['MixinConfigs'] = mixinConfigValue
-            }
-            if (configurations.contain.size() > 0) {
-                attribute_map['ContainedDeps'] = configurations.contain.collect { it.name }.join(' ')
-                attribute_map['NonModDeps'] = true
-            }
-            if (propertyBool('is_coremod')) {
-                attribute_map['FMLCorePlugin'] = propertyString('coremod_plugin_class_name')
-                if (propertyBool('coremod_includes_mod')) {
-                    attribute_map['FMLCorePluginContainsFMLMod'] = true
-                }
-            }
-            if (propertyBool('use_access_transformer')) {
-                attribute_map['FMLAT'] = propertyString('access_transformer_locations')
-            }
-            attributes(attribute_map)
+            attributes(modManifestAttributes())
         }
     }
-    finalizedBy(tasks.named(remapTaskName).get())
 }
 
 if (propertyBool('enable_shadow')) {
     // Shade deps to the dev jar, so the normal dev jar will contain deps
     shadowJar {
         archiveClassifier = 'dev'
+        destinationDirectory = layout.buildDirectory.dir('libs')
         //noinspection GroovyAssignabilityCheck,GroovyAccessibility
         configurations = [ project.configurations.shaded ]
+        // ShadowJar has its own `configurations` (the shaded ones), so the project's have to be qualified
+        if (project.configurations.contain.size() > 0) {
+            into('/') {
+                from project.configurations.contain
+            }
+        }
+        if (mixinRefmap != null) {
+            // The shaded jar replaces `jar`, and reobfuscation remaps this jar, so the refmap has to be here
+            from(mixinRefmap)
+        }
+        doFirst {
+            manifest {
+                attributes(modManifestAttributes())
+            }
+        }
     }
     // Unshaded dev jar get 'plain' as name
     tasks.named("jar").configure {
         finalizedBy shadowJar
-        archiveClassifier = "plain"
     }
+}
+
+tasks.named(reobfTaskName).configure {
+    // Convention from jar/shadowJar
+    archiveClassifier = ''
 }
 
 idea {
@@ -235,8 +265,8 @@ idea {
     project {
         settings {
             runConfigurations {
-                "0. Gen Sources"(Gradle) {
-                    taskNames = ["genSources"]
+                "0. Create Artifacts"(Gradle) {
+                    taskNames = ["createMinecraftArtifacts"]
                 }
                 "1. Run Client"(Gradle) {
                     taskNames = ["runClient"]
