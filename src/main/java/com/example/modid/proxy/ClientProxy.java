@@ -1,4 +1,4 @@
 package com.example.modid.proxy;
 
-public class ClientProxy implements IProxy{
+public class ClientProxy extends CommonProxy {
 }

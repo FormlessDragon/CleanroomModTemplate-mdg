@@ -17,3 +17,21 @@ You **MUST** write AT entries in SRG name (eg: `field_130070_K # fileResourcepac
 For IntelliJ users, it is recommended to switch
 to [RuiXuqi/MinecraftDev](https://github.com/RuiXuqi/MinecraftDev/releases) for AT completion. Also RFG and Unimined
 support have been merged there.
+
+## Template conventions
+
+The build generates `Tags` under `build/generated/sources/tags` from the Git tag and
+short commit hash. Use `Tags.MOD_ID`, `Tags.MOD_NAME`, and `Tags.VERSION` in the mod
+entry point; no checked-in `Reference` class is needed.
+
+Resource metadata is kept in `src/main/resources` and expands the `gradle.properties`
+values during `processResources`. Access transformer entries use SRG names for the
+ModDevGradle Cleanroom toolchain.
+
+## GitHub Actions
+
+The repository workflows are thin callers for the matching `*-mdg.yml` workflows in
+`FormlessDragon/.github`. The shared MDG workflows keep the build, release, and
+runtime-test sequence used by the template while using the ModDevGradle staging
+tasks. The release workflow builds the JitPack repository and publishes to CurseForge
+when `CURSEFORGE_TOKEN` and `curseforge_project_id` are configured.

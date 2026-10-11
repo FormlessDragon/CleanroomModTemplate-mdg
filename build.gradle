@@ -9,12 +9,40 @@ plugins {
     id 'maven-publish'
     id 'org.jetbrains.gradle.plugin.idea-ext' version '1.4.1'
     id 'net.neoforged.moddev.mcpforge' version '2.0.185-legacy'
-    id 'net.kyori.blossom' version '2.2.0'
     id 'com.diffplug.spotless' version '8.10.4' apply false
     id 'com.gradleup.shadow' version '9.6.1' apply false
 }
 
 apply from: 'gradle/scripts/helpers.gradle'
+
+private String gitOutput(List<String> args, String fallback) {
+    try {
+        def process = new ProcessBuilder(['git'] + args)
+            .directory(rootProject.projectDir)
+            .redirectErrorStream(true)
+            .start()
+        def stdout = process.inputStream.getText('UTF-8').trim()
+        if (process.waitFor() == 0 && !stdout.isEmpty()) {
+            return stdout
+        }
+    } catch (Exception ignored) {
+        // Source archives and offline builds may not have Git available.
+    }
+    return fallback
+}
+
+private String defaultModVersion() {
+    def previousTag = gitOutput(['describe', '--tags', '--abbrev=0', '--exclude=dev'], '0.0.0')
+    if (previousTag.startsWith('v')) {
+        previousTag = previousTag.substring(1)
+    }
+    def shortHash = gitOutput(['rev-parse', '--short', 'HEAD'], 'unknown')
+    return "${previousTag}+${shortHash}"
+}
+
+if (!gradle.startParameter.projectProperties.containsKey('mod_version')) {
+    project.setProperty('mod_version', defaultModVersion())
+}
 
 if (propertyBool('enable_shadow')) {
     apply plugin: 'com.gradleup.shadow'
@@ -33,7 +61,7 @@ assertSubProperties 'is_coremod', 'coremod_includes_mod', 'coremod_plugin_class_
 setDefaultProperty 'generate_sources_jar', true, false
 setDefaultProperty 'generate_javadocs_jar', true, false
 setDefaultProperty 'enable_shadow', false, false
-setDefaultProperty 'minecraft_username', true, 'Dev'
+setDefaultProperty 'minecraft_username', true, 'Developer'
 setDefaultProperty 'extra_jvm_args', false, ''
 
 version = propertyString('mod_version')
@@ -149,40 +177,77 @@ dependencies {
 
 apply from: 'gradle/scripts/dependencies.gradle'
 
-processResources {
-    rename '(.+_at.cfg)', 'META-INF/$1'
+def generatedTagsSourceDir = layout.buildDirectory.dir('generated/sources/tags/java')
+def generateTagsSource = tasks.register('generateTagsSource') {
+    def tagsPackage = "${propertyString('root_package')}.${propertyString('mod_id')}"
+    def outputFile = generatedTagsSourceDir.map {
+        it.file("${tagsPackage.replace('.', '/')}/Tags.java")
+    }
+
+    inputs.property('root_package', propertyString('root_package'))
+    inputs.property('mod_id', propertyString('mod_id'))
+    inputs.property('mod_name', propertyString('mod_name'))
+    inputs.property('mod_version', propertyString('mod_version'))
+    outputs.file(outputFile)
+
+    doLast {
+        def file = outputFile.get().asFile
+        file.parentFile.mkdirs()
+        file.text = """package ${tagsPackage};
+
+public final class Tags {
+
+    public static final String MOD_ID = "${propertyString('mod_id')}";
+    public static final String MOD_NAME = "${propertyString('mod_name')}";
+    public static final String VERSION = "${propertyString('mod_version')}";
+
+    private Tags() {
+    }
+}
+"""
+    }
 }
 
 sourceSets {
     main {
-        blossom {
-            javaSources {
-                property('mod_id', propertyString('mod_id'))
-                property('mod_name', propertyString('mod_name'))
-                property('mod_version', propertyString('mod_version'))
-            }
-            resources {
-                property('mod_id', propertyString('mod_id'))
-                property('mod_name', propertyString('mod_name'))
-                property('mod_version', propertyString('mod_version'))
-                property('mod_description', propertyString('mod_description'))
-                property('mod_authors', propertyStringList('mod_authors', ',').collect {it.strip()}.join('", "'))
-                property('mod_credits', propertyString('mod_credits'))
-                property('mod_license', propertyString('mod_license'))
-                property('mod_url', propertyString('mod_url'))
-                property('mod_issue_tracker_url', propertyString('mod_issue_tracker_url'))
-                property('mod_update_json', propertyString('mod_update_json'))
-                property('mod_icon_item', propertyString('mod_icon_item'))
-                property('mod_logo_path', propertyString('mod_logo_path'))
-                property('mod_icon_path', propertyString('mod_icon_path'))
-                property('mod_background_path', propertyString('mod_background_path'))
-            }
+        java {
+            srcDir generatedTagsSourceDir
         }
     }
 }
 
+processResources {
+    rename '(.+_at.cfg)', 'META-INF/$1'
+    def resourceProps = [
+        mod_id               : propertyString('mod_id'),
+        mod_name             : propertyString('mod_name'),
+        mod_version          : propertyString('mod_version'),
+        mod_description      : propertyString('mod_description'),
+        mod_authors          : propertyStringList('mod_authors', ',').collect { it.strip() }.join('", "'),
+        mod_credits          : propertyString('mod_credits'),
+        mod_license          : propertyString('mod_license'),
+        mod_url              : propertyString('mod_url'),
+        mod_issue_tracker_url: propertyString('mod_issue_tracker_url'),
+        mod_update_json      : propertyString('mod_update_json'),
+        mod_icon_item        : propertyString('mod_icon_item'),
+        mod_logo_path        : propertyString('mod_logo_path'),
+        mod_icon_path        : propertyString('mod_icon_path'),
+        mod_background_path  : propertyString('mod_background_path')
+    ]
+    inputs.properties(resourceProps)
+    filesMatching(['mcmod.info', 'pack.mcmeta']) {
+        expand(resourceProps)
+    }
+}
+
+
 compileJava {
+    dependsOn(generateTagsSource)
     sourceCompatibility = targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.named('sourcesJar').configure {
+    dependsOn(generateTagsSource)
 }
 
 def modManifestAttributes = {
