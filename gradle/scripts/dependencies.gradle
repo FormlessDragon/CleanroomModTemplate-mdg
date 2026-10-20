@@ -37,6 +37,7 @@ repositories {
 }
 
 dependencies {
+    implementation "com.cleanroommc:cleanmix:0.7.4"
     modImplementation 'mezz:jei:4.35.0'
 
     // Example - Dependency descriptor:
