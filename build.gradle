@@ -253,6 +253,39 @@ processResources {
     }
 }
 
+def syncDevResourcesToClasses = tasks.register('syncDevResourcesToClasses', Copy) {
+    dependsOn(tasks.named('processResources'))
+    doFirst {
+        delete(fileTree(layout.buildDirectory.dir('classes/java/main')) {
+            exclude('**/*.class')
+        })
+    }
+    from(layout.buildDirectory.dir('resources/main')) {
+        exclude('**/*.class')
+    }
+    into(layout.buildDirectory.dir('classes/java/main'))
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+def stageDevClassFiles = tasks.register('stageDevClassFiles', Sync) {
+    dependsOn(tasks.named('compileJava'), syncDevResourcesToClasses)
+    from(layout.buildDirectory.dir('classes/java/main')) {
+        include('**/*.class')
+    }
+    into(layout.buildDirectory.dir('tmp/devmod-classes'))
+}
+
+def syncDevClassesToResources = tasks.register('syncDevClassesToResources', Copy) {
+    dependsOn(stageDevClassFiles, tasks.named('processResources'))
+    doFirst {
+        delete(fileTree(layout.buildDirectory.dir('resources/main')) {
+            include('**/*.class')
+        })
+    }
+    from(layout.buildDirectory.dir('tmp/devmod-classes'))
+    into(layout.buildDirectory.dir('resources/main'))
+}
+
 
 compileJava {
     dependsOn(generateTagsSource)
@@ -283,6 +316,8 @@ def modManifestAttributes = {
 }
 
 jar {
+    dependsOn(syncDevResourcesToClasses)
+    dependsOn(syncDevClassesToResources)
     if (propertyBool('enable_shadow')) {
         archiveClassifier = 'plain'
     } else {
