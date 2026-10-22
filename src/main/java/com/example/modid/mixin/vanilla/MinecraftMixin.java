@@ -1,4 +1,4 @@
-package com.example.modid.mixin;
+package com.example.modid.mixin.vanilla;
 
 import com.example.modid.ExampleMod;
 import net.minecraft.client.Minecraft;
