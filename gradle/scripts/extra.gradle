@@ -37,6 +37,8 @@ def runtimeProductionAttributes = {
 }
 runtimeTestProductionMods.attributes(runtimeProductionAttributes)
 
+// ModDevGradle can resolve a named `dev` classifier for runtime tests. Replace
+// it with the production SRG artifact before staging the Cleanroom instance.
 def runtimeTestReobfMods = configurations.maybeCreate('runtimeTestReobfMods')
 runtimeTestReobfMods.canBeConsumed = false
 runtimeTestReobfMods.canBeResolved = true
@@ -342,6 +344,30 @@ tasks.register('stageRuntimeTestMods', Sync) {
     into(runtimeTestModsDir)
     include '*.jar'
     duplicatesStrategy = DuplicatesStrategy.FAIL
+    doLast {
+        def stagedNames = destinationDir.listFiles()
+            ?.findAll { it.isFile() && it.name.endsWith('.jar') }
+            ?.collect { it.name } as Set ?: [] as Set
+        def leakedNamedJars = runtimeTestNamedModJars.files.findAll {
+            stagedNames.contains(it.name)
+        }
+        if (!leakedNamedJars.isEmpty()) {
+            throw new GradleException(
+                "[RuntimeTest] Named development jar(s) were staged: " +
+                    leakedNamedJars.collect { it.name }.join(', ')
+            )
+        }
+        def missingReobfuscatedJars = runtimeTestReobfMods.files.findAll {
+            it.name.endsWith('.jar') && !it.name.endsWith('-sources.jar') &&
+                !stagedNames.contains(it.name)
+        }
+        if (!missingReobfuscatedJars.isEmpty()) {
+            throw new GradleException(
+                "[RuntimeTest] Reobfuscated replacement jar(s) were not staged: " +
+                    missingReobfuscatedJars.collect { it.name }.join(', ')
+            )
+        }
+    }
 }
 
 tasks.register('stageRuntimeTestClientMods', Sync) {
